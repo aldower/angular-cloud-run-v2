@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  GCP_PROJECT_ID: "your-gcp-project-id" # TODO: Replace with your GCP project ID
+  GCP_PROJECT_ID: "hale-monument-477117-k8"
   GCP_REGION: "your-gcp-region" # TODO: Replace with your GCP region
   ARTIFACT_REGISTRY_REPO: "your-artifact-registry-repo" # TODO: Replace with your Artifact Registry repo name
   CLOUD_RUN_SERVICE_NAME: "gemini-angular-app" # TODO: Replace with your Cloud Run service name
@@ -26,8 +26,7 @@ jobs:
         id: auth
         uses: 'google-github-actions/auth@v2'
         with:
-          workload_identity_provider: 'projects/your-gcp-project-number/locations/global/workloadIdentityPools/your-pool-name/providers/your-provider-name' # TODO: Replace with your WIF provider
-          service_account: 'your-service-account-email' # TODO: Replace with your Service Account email
+          service_account: ${{ secrets.SA_GCP_DEV }}
 
       - name: Set up Cloud SDK
         uses: 'google-github-actions/setup-gcloud@v2'
