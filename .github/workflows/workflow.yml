@@ -79,10 +79,6 @@ jobs:
         with:
           credentials_json: ${{ secrets.SA_GCP_DEV }}
 
-      - name: Set up Cloud SDK
-        uses: 'google-github-actions/setup-gcloud@v2'
-
-
       - name: Deploy to Cloud Run staging
         run: |
           gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }}-${{ secrets.ENVIRONMENT_NAME }} \
