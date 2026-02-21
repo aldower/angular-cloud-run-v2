@@ -38,7 +38,7 @@ gcloud projects describe $PROJECT_ID --format="value(projectNumber)"
 
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/850974288704/locations/global/workloadIdentityPools/github-pool/attribute.repository/aldower/angular-cloud-run-v2"
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/ORG/repository"
 
 
 
