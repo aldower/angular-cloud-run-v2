@@ -1,0 +1,49 @@
+export PROJECT_ID="tu-proyecto-id"
+export SA_NAME="github-actions-sa"
+
+
+gcloud iam service-accounts create github-actions-sa \
+    --display-name="GitHub Actions Service Account"
+
+# Confirmar que se creó (ahora sí debería aparecer en la lista)
+gcloud iam service-accounts list --filter="name:github-actions-sa"
+
+
+gcloud projects add-iam-policy-binding gh-proj-devsecops \
+    --member="serviceAccount:github-actions-sa@gh-proj-devsecops.iam.gserviceaccount.com" \
+    --role="roles/owner"
+
+gcloud iam workload-identity-pools create "github-pool" \
+    --location="global" \
+    --display-name="GitHub Pool"
+
+
+gcloud iam workload-identity-pools providers create-oidc "github-provider" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --display-name="GitHub Provider" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='TU_ORG/TU_REPO'"
+
+
+  gcloud iam workload-identity-pools providers describe github-provider \
+  --location=global \
+  --workload-identity-pool=github-pool \
+  --format="value(name)"
+
+SA_EMAIL="github-actions-sa@gh-proj-devsecops.iam.gserviceaccount.com"
+
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/aldower/angular-cloud-run"
+
+  - name: Google Auth
+  id: auth
+  uses: google-github-actions/auth@v3
+  with:
+    workload_identity_provider: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+    service_account: github-actions-sa@gh-proj-devsecops.iam.gserviceaccount.com
+
+- run: gcloud auth list
+- run: gcloud projects describe gh-proj-devsecops --format="value(projectId)"
