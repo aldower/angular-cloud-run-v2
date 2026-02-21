@@ -13,7 +13,7 @@ env:
   CLOUD_RUN_SERVICE_NAME: "gemini-angular-app"
 jobs:
   dev: 
-    # environment: dev
+    environment: dev
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
@@ -31,22 +31,16 @@ jobs:
           service_account: github-actions-sa@gh-prj-angular-gemini.iam.gserviceaccount.com
           #credentials_json: ${{ secrets.SA_GCP_DEV }}       
 
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
 
+      - name: Docker Auth
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-
-
-
-
-  #     - name: Set up Cloud SDK
-  #       uses: 'google-github-actions/setup-gcloud@v2'
-
-  #     - name: Docker Auth
-  #       run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
-
-  #     - name: Build and Push Image
-  #       run: |
-  #         docker build -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }} .
-  #         docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }}
+      - name: Build and Push Image
+        run: |
+          docker build -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }} .
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }}
 
   #     - name: Deploy to Cloud Run
   #       run: |
