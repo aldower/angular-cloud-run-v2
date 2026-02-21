@@ -50,6 +50,7 @@ jobs:
             --region ${{ env.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
+            --no-traffic \
             --set-env-vars="ENVIRONMENT_NAME=dev"
 
 
