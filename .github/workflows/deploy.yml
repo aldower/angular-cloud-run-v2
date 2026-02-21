@@ -5,6 +5,7 @@ on:
     branches:
       - main
 
+      
 env:
   GCP_PROJECT_ID: "gh-proj-devsecops"
   GCP_REGION: "us-central1"
