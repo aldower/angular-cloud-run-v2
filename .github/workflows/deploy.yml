@@ -7,9 +7,9 @@ on:
 
       
 env:
-  GCP_PROJECT_ID: "gh-proj-devsecops"
+  GCP_PROJECT_ID: "gh-prj-angular-gemini"
   GCP_REGION: "us-central1"
-  ARTIFACT_REGISTRY_REPO: "cna-registry" 
+  ARTIFACT_REGISTRY_REPO: "container-repository-gemini" 
   CLOUD_RUN_SERVICE_NAME: "gemini-angular-app"
 jobs:
   dev: 
