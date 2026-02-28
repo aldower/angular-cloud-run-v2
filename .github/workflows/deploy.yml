@@ -45,38 +45,37 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }} \
+          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }}-dev \
             --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }} \
             --region ${{ env.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
             --set-env-vars="ENVIRONMENT_NAME=dev"
 
-  #          --no-traffic \
-  #     - name: Deploy to Cloud Run
-  #       run: |
-  #         gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }} \
-  #           --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }} \
-  #           --region ${{ env.GCP_REGION }} \
-  #           --platform managed \
-  #           --allow-unauthenticated \
-  #           --set-env-vars="ENVIRONMENT_NAME=${{ secrets.ENVIRONMENT_NAME }}"
+  cert: 
+#    environment: dev
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  # staging: 
-  #   environment: staging
-  #   needs: dev
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: 'read'
-  #     id-token: 'write'
+      - name: Google Auth
+        id: auth
+        uses: 'google-github-actions/auth@v3'
+        with:
+          workload_identity_provider: projects/850974288704/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions-sa@gh-prj-angular-gemini.iam.gserviceaccount.com
+          #credentials_json: ${{ secrets.SA_GCP_DEV }}       
 
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-
-  #     - name: Google Auth
-  #       id: auth
-  #       uses: 'google-github-actions/auth@v3'
-  #       with:
-  #         credentials_json: ${{ secrets.SA_GCP_DEV }}   
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE_NAME }}-cert \
+            --image ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.CLOUD_RUN_SERVICE_NAME }}:${{ github.sha }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars="ENVIRONMENT_NAME=cert"
