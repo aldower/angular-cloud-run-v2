@@ -1,3 +1,6 @@
+# 1. Crear proyecto de google
+# 2. Abrir la cli de google en el proyecto creado
+
 export PROJECT_ID="gh-prj-angular-gemini"
 export SA_NAME="github-actions-sa"
 
