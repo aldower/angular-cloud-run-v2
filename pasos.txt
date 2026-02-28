@@ -1,7 +1,8 @@
 # 1. Crear proyecto de google
 # 2. Abrir la cli de google en el proyecto creado
 
-export PROJECT_ID="gh-prj-angular-gemini"
+# 3. En las siguientes lineas, cambiar project ID por id del proyecto creado
+export PROJECT_ID="gh-proj-devsecops-02"
 export SA_NAME="github-actions-sa"
 
 
@@ -39,6 +40,7 @@ SA_EMAIL="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 gcloud projects describe $PROJECT_ID --format="value(projectNumber)"
 
+# Luego de ejecutar el script anterior, debemos reemplazar el PROJECT_NUMBER, asimismo, debemos reemplazar la ORG y repository
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/ORG/repository"
