@@ -78,7 +78,7 @@ jobs:
             --region ${{ env.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT_NAME=-${{ secrets.ENVIRONMENT_NAME }}"
+            --set-env-vars="ENVIRONMENT_NAME=${{ secrets.ENVIRONMENT_NAME }}"
 
   prod: 
     environment: prod
@@ -106,4 +106,4 @@ jobs:
             --region ${{ env.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT_NAME=-${{ secrets.ENVIRONMENT_NAME }}"
+            --set-env-vars="ENVIRONMENT_NAME=${{ secrets.ENVIRONMENT_NAME }}"
