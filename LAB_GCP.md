@@ -82,38 +82,59 @@ gcloud compute instances start $VM_NAME --zone=$ZONE --project=$PROJECT_ID
 
 El scope `cloud-platform` es necesario: con los scopes por defecto el push o el deploy fallan aunque la SA tenga los roles.
 
-## 6. Preparar la VM
+## 6. Preparar la VM y el contenedor de Jenkins
 
-Conectarse (`gcloud compute ssh $VM_NAME --zone=$ZONE`) y verificar:
+Jenkins corre en un contenedor Docker. Conectarse (`gcloud compute ssh $VM_NAME --zone=$ZONE`) y verificar:
 
 ```bash
 # Identidad de la VM
 curl -s -H "Metadata-Flavor: Google" \
   http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email
 
-# Docker disponible para el usuario de Jenkins
-sudo usermod -aG docker jenkins && sudo systemctl restart jenkins
+# Nombre del contenedor y sus montajes
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
+export JK=jenkins   # reemplazar por el nombre real
+docker inspect $JK --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
 ```
 
-Autenticar el Docker **del host** contra Artifact Registry (el `docker push` de la etapa *Build and Push Image* corre en el host, no en el contenedor de `cloud-sdk`). Requiere `gcloud` instalado en la VM:
+Requisitos del contenedor:
+
+- Montar `/var/run/docker.sock:/var/run/docker.sock` y `jenkins_home` en `/var/jenkins_home` (volumen persistente).
+- Tener el CLI de Docker: `docker exec $JK docker version`. Si falta, instalarlo en la imagen.
+- El usuario `jenkins` del contenedor debe poder usar el socket (ver troubleshooting).
+
+Autenticar Docker **dentro del contenedor** contra Artifact Registry (el `docker push` corre ahí). Se usa `docker-credential-gcr`, que pide el token a la SA de la VM en cada push, así no caduca:
 
 ```bash
-sudo -u jenkins gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+docker exec -u root $JK bash -c '
+  curl -fsSL https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v2.1.22/docker-credential-gcr_linux_amd64-2.1.22.tar.gz \
+  | tar xz -C /usr/local/bin docker-credential-gcr'
+
+docker exec -u jenkins $JK docker-credential-gcr configure-docker \
+  --registries=us-central1-docker.pkg.dev
 ```
 
-Esto usa la SA de la VM y se hace una sola vez.
+- Ajustar la versión si cambia (releases del proyecto `docker-credential-gcr`).
+- Escribe `credHelpers` en `/var/jenkins_home/.docker/config.json`, que persiste en el volumen.
+- Si recreas el contenedor sin ese volumen, incluir el binario en la imagen de Jenkins.
+
+Prueba:
+
+```bash
+docker exec -u jenkins $JK docker pull us-central1-docker.pkg.dev/$PROJECT_ID/$AR_REPO/<imagen>:<tag>
+```
 
 ## 7. Configuración en Jenkins
 
 1. Plugin **Docker Pipeline** instalado (para `agent { docker {...} }`).
-2. Nodo/agente con acceso a `/var/run/docker.sock` (Jenkins en la misma VM).
+2. Contenedor con acceso a `/var/run/docker.sock` (sección 6).
 3. Crear el job (Pipeline o Multibranch) apuntando a este repo; usa el `Jenkinsfile` de la raíz.
 4. No se necesitan credenciales de GCP en Jenkins.
 
 ## 8. Cómo lo usa el pipeline
 
 - **GCP & Docker Auth**: `gcloud config set project` y `configure-docker` dentro del contenedor `cloud-sdk`.
-- **Build and Push Image**: `docker build/push` en el host con la configuración del paso 6.
+- **Build and Push Image**: `docker build/push` dentro del contenedor de Jenkins (vía `docker.sock`), con el credential helper de la sección 6.
 - **Deploy to Cloud Run**: `gcloud run deploy` en un contenedor `cloud-sdk`, autenticado por el metadata server.
 
 ## 9. Verificación y troubleshooting
@@ -126,11 +147,11 @@ gcloud compute instances describe $VM_NAME --zone=$ZONE --project=$PROJECT_ID \
 | Error | Causa |
 |---|---|
 | `Request had insufficient authentication scopes` | La VM no tiene el scope `cloud-platform` (sección 5) |
-| `denied: Permission artifactregistry.repositories.uploadArtifacts` | Falta `artifactregistry.writer` o falta `configure-docker` en el host (sección 6) |
-| `unauthenticated: ... docker login` en el push | `configure-docker` no se ejecutó con el usuario `jenkins` |
+| `denied: Permission artifactregistry.repositories.uploadArtifacts` | Falta `artifactregistry.writer` o falta el credential helper en el contenedor (sección 6) |
+| `unauthenticated: ... docker login` en el push | `docker-credential-gcr configure-docker` no se ejecutó como usuario `jenkins` del contenedor |
 | `iam.serviceaccounts.actAs` en deploy | Falta `serviceAccountUser` sobre la SA de runtime |
 | `Permission 'run.services.create' denied` | Falta `roles/run.admin` |
-| `permission denied ... docker.sock` | El usuario `jenkins` no está en el grupo `docker` |
+| `permission denied ... docker.sock` | El usuario `jenkins` del contenedor no accede al socket: levantar el contenedor con `--group-add $(stat -c %g /var/run/docker.sock)` o `-u root` |
 | `gcloud` en el contenedor pide login | El contenedor no alcanza el metadata server; no usar `--network none` |
 
 ## Alternativa: OIDC / Workload Identity Federation
