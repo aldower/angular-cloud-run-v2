@@ -1,0 +1,35 @@
+# Dependencias
+node_modules/
+
+# Build y cache de Angular
+dist/
+.angular/
+out-tsc/
+tmp/
+
+# Credenciales y secretos (OIDC/GCP)
+.oidc_token
+.gcp_cred.json
+.access_token
+*.json.key
+gha-creds-*.json
+service-account*.json
+jwks.json
+.env
+.env.*
+*.pem
+*.key
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE / SO
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
