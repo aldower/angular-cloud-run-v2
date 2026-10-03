@@ -1,81 +1,47 @@
-# LAB: Jenkins + GCP con OpenID Connect (Workload Identity Federation)
+# LAB: Jenkins en una VM de GCP + Artifact Registry + Cloud Run
 
-Objetivo: que el pipeline del [Jenkinsfile](Jenkinsfile) se autentique en GCP sin llaves JSON, usando un ID token OIDC emitido por Jenkins.
+Objetivo: que el [Jenkinsfile](Jenkinsfile) se autentique en GCP **sin llaves JSON ni OIDC**, usando la Service Account asociada a la VM donde corre Jenkins (credenciales del servidor de metadatos).
 
 ```mermaid
 sequenceDiagram
-    Jenkins->>Jenkins: Plugin OIDC emite ID token (credencial gcp-oidc-token)
-    Jenkins->>GCP STS: Intercambia token (Workload Identity Pool/Provider)
-    GCP STS->>Jenkins: Token federado
-    Jenkins->>IAM: Impersona jenkins-deployer@
-    Jenkins->>Artifact Registry / Cloud Run: push y deploy
+    participant J as Jenkins (VM GCP)
+    participant M as Metadata server
+    participant AR as Artifact Registry
+    participant CR as Cloud Run
+    J->>M: Pide token de la SA de la VM
+    M-->>J: Access token (corta duración)
+    J->>AR: docker push
+    J->>CR: gcloud run deploy
 ```
 
-## 0. Requisitos
+El contenedor `google/cloud-sdk` de las etapas del pipeline hereda esa identidad: `gcloud` consulta el metadata server automáticamente.
 
-- Jenkins accesible por HTTP (ej. `http://3.144.78.76:8090`) o HTTPS. GCP **exige que el issuer sea `https://`**; sin HTTPS real se usa un issuer ficticio + JWKS manual (sección 3).
-- `gcloud` autenticado como administrador del proyecto.
-- Agente Jenkins con Docker y permiso para ejecutar contenedores (`/var/run/docker.sock`).
-
-## 1. Variables
+## 1. Variables (Cloud Shell)
 
 ```bash
 export PROJECT_ID="sanbox-aldo-prod"
 export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
 export REGION="us-central1"
+export ZONE="us-central1-a"
 export AR_REPO="container-repository-gemini-at"
-export POOL="jenkins-pool"
-export PROVIDER="jenkins-provider"
+export VM_NAME="jenkins-vm"                 # nombre de tu VM
 export SA_NAME="jenkins-deployer"
 export SA_EMAIL="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
-export JENKINS_URL="http://3.144.78.76:8090"          # URL real de Jenkins (sin "/" final)
-export OIDC_ISSUER="https://jenkins.local/oidc"      # issuer ficticio https (debe ser igual en Jenkins y GCP)
 ```
-
-Copiar el valor de `$PROJECT_NUMBER` en `GCP_PROJECT_NUMBER` del Jenkinsfile.
 
 ## 2. APIs
 
 ```bash
-gcloud services enable iam.googleapis.com iamcredentials.googleapis.com \
-  sts.googleapis.com artifactregistry.googleapis.com run.googleapis.com \
-  cloudresourcemanager.googleapis.com --project $PROJECT_ID
+gcloud services enable artifactregistry.googleapis.com run.googleapis.com \
+  iam.googleapis.com cloudresourcemanager.googleapis.com --project $PROJECT_ID
 ```
 
-## 3. Workload Identity Pool y Provider
+## 3. Repositorio de Artifact Registry (si no existe)
 
 ```bash
-gcloud iam workload-identity-pools create $POOL \
-  --project=$PROJECT_ID --location=global \
-  --display-name="Jenkins Pool"
-
-### 3.1 Obtener el JWKS de Jenkins
-
-Desde una máquina que llegue a Jenkins (o desde el propio servidor):
-
-```bash
-curl -s http://3.144.78.76:8090/oidc/jwks > jwks.json
+gcloud artifacts repositories create $AR_REPO \
+  --project=$PROJECT_ID --location=$REGION --repository-format=docker
 ```
-
-Si trabajas en Cloud Shell, súbelo con el menú ⋮ > *Upload*.
-
-### 3.2 Crear el provider (sin HTTPS real)
-
-```bash
-gcloud iam workload-identity-pools providers create-oidc $PROVIDER \
-  --project=$PROJECT_ID --location=global \
-  --workload-identity-pool=$POOL \
-  --issuer-uri="$OIDC_ISSUER" \
-  --jwk-json-path=jwks.json \
-  --allowed-audiences="gcp" \
-  --attribute-mapping="google.subject=assertion.sub"
-```
-
-- Con `--jwk-json-path` GCP no consulta el issuer; solo exige que sea `https://` y que coincida con el `iss` del token.
-- `--allowed-audiences` debe coincidir con el **Audience** de la credencial en Jenkins (sección 6).
-- No se usa `attribute-condition` hasta conocer el `sub` real (revisa un token en jwt.io); luego restringe el binding de la sección 5 a ese subject.
-- Si Jenkins rota llaves, hay que actualizar el JWKS (`providers update-oidc ... --jwk-json-path=jwks.json`).
-- Si luego tienes HTTPS real: `--issuer-uri="https://TU_DOMINIO/oidc"` sin `--jwk-json-path`, y Jenkins URL en HTTPS.
 
 ## 4. Service Account y permisos
 
@@ -99,58 +65,74 @@ gcloud iam service-accounts add-iam-policy-binding \
   --member="serviceAccount:$SA_EMAIL" --role="roles/iam.serviceAccountUser"
 ```
 
-## 5. Permitir que la identidad federada impersone la SA
+## 5. Asociar la SA a la VM de Jenkins
 
-Todo el pool:
+Hay que detener la VM para cambiar su service account.
 
 ```bash
-gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
-  --project=$PROJECT_ID \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL/*"
+gcloud compute instances stop $VM_NAME --zone=$ZONE --project=$PROJECT_ID
+
+gcloud compute instances set-service-account $VM_NAME \
+  --zone=$ZONE --project=$PROJECT_ID \
+  --service-account=$SA_EMAIL \
+  --scopes=https://www.googleapis.com/auth/cloud-platform
+
+gcloud compute instances start $VM_NAME --zone=$ZONE --project=$PROJECT_ID
 ```
 
-Solo un subject concreto (más seguro):
+El scope `cloud-platform` es necesario: con los scopes por defecto el push o el deploy fallan aunque la SA tenga los roles.
+
+## 6. Preparar la VM
+
+Conectarse (`gcloud compute ssh $VM_NAME --zone=$ZONE`) y verificar:
 
 ```bash
-  --member="principal://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL/subject/<SUB_DEL_TOKEN>"
+# Identidad de la VM
+curl -s -H "Metadata-Flavor: Google" \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email
+
+# Docker disponible para el usuario de Jenkins
+sudo usermod -aG docker jenkins && sudo systemctl restart jenkins
 ```
 
-## 6. Configuración en Jenkins
-
-1. **Instalar plugin**: *Manage Jenkins > Plugins > Available* → **OpenID Connect Provider** (`oidc-provider`). Reiniciar.
-2. **Jenkins URL**: *Manage Jenkins > System > Jenkins Location* → `Jenkins URL` = `$JENKINS_URL`.
-3. **Credencial**: *Manage Jenkins > Credentials > (global) > Add Credentials*
-   - Kind: **OpenID Connect id token**
-   - ID: `gcp-oidc-token`
-   - Audience: `gcp` (igual que `--allowed-audiences`)
-   - Issuer: `https://jenkins.local/oidc` (igual a `$OIDC_ISSUER`; suele estar en la sección avanzada)
-4. **Docker**: el usuario de Jenkins debe poder usar Docker y el agente montar `/var/run/docker.sock`. Plugin **Docker Pipeline** instalado (para `agent { docker {...} }`).
-5. **Multibranch / Pipeline**: crear el job apuntando a este repo (usa el `Jenkinsfile` de la raíz).
-6. Editar en el [Jenkinsfile](Jenkinsfile): `GCP_PROJECT_NUMBER`, `WIF_POOL`, `WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT` según las variables de la sección 1.
-
-## 7. Cómo lo usa el pipeline
-
-- `gcpAuth()` lee el token de la credencial `gcp-oidc-token`, genera un archivo de credenciales externas con `gcloud iam workload-identity-pools create-cred-config` y hace `gcloud auth login --cred-file`.
-- La etapa **GCP Auth (OIDC)** además guarda un access token temporal para que `docker login` (en el host) autentique contra Artifact Registry; se borra en `post`.
-- **Deploy to Cloud Run** vuelve a autenticarse (cada contenedor es nuevo).
-
-## 8. Verificación y troubleshooting
+Autenticar el Docker **del host** contra Artifact Registry (el `docker push` de la etapa *Build and Push Image* corre en el host, no en el contenedor de `cloud-sdk`). Requiere `gcloud` instalado en la VM:
 
 ```bash
-curl -s $JENKINS_URL/oidc/.well-known/openid-configuration
-curl -s $JENKINS_URL/oidc/jwks
-gcloud iam workload-identity-pools providers describe $PROVIDER \
-  --workload-identity-pool=$POOL --location=global --project=$PROJECT_ID
+sudo -u jenkins gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+```
+
+Esto usa la SA de la VM y se hace una sola vez.
+
+## 7. Configuración en Jenkins
+
+1. Plugin **Docker Pipeline** instalado (para `agent { docker {...} }`).
+2. Nodo/agente con acceso a `/var/run/docker.sock` (Jenkins en la misma VM).
+3. Crear el job (Pipeline o Multibranch) apuntando a este repo; usa el `Jenkinsfile` de la raíz.
+4. No se necesitan credenciales de GCP en Jenkins.
+
+## 8. Cómo lo usa el pipeline
+
+- **GCP & Docker Auth**: `gcloud config set project` y `configure-docker` dentro del contenedor `cloud-sdk`.
+- **Build and Push Image**: `docker build/push` en el host con la configuración del paso 6.
+- **Deploy to Cloud Run**: `gcloud run deploy` en un contenedor `cloud-sdk`, autenticado por el metadata server.
+
+## 9. Verificación y troubleshooting
+
+```bash
+gcloud compute instances describe $VM_NAME --zone=$ZONE --project=$PROJECT_ID \
+  --format="value(serviceAccounts[0].email,serviceAccounts[0].scopes)"
 ```
 
 | Error | Causa |
 |---|---|
-| `invalid_grant` / `audience` | Audience de la credencial ≠ `--allowed-audiences` |
-| `The given credential is rejected by the attribute condition` | `attribute-condition` no cumple con el `sub` real |
-| `Permission 'iam.serviceAccounts.getAccessToken' denied` | Falta `workloadIdentityUser` (sección 5) o API `iamcredentials` |
-| `Invalid OIDC issuer URI. The scheme must be https` | El issuer debe ser `https://`; usar `$OIDC_ISSUER` + `--jwk-json-path` |
-| `unable to fetch jwks` / firma inválida | JWKS desactualizado o `iss` del token ≠ `--issuer-uri` |
-| `denied: Permission artifactregistry.repositories.uploadArtifacts` | Falta `artifactregistry.writer` |
+| `Request had insufficient authentication scopes` | La VM no tiene el scope `cloud-platform` (sección 5) |
+| `denied: Permission artifactregistry.repositories.uploadArtifacts` | Falta `artifactregistry.writer` o falta `configure-docker` en el host (sección 6) |
+| `unauthenticated: ... docker login` en el push | `configure-docker` no se ejecutó con el usuario `jenkins` |
 | `iam.serviceaccounts.actAs` en deploy | Falta `serviceAccountUser` sobre la SA de runtime |
-| `docker: command not found` en etapa Build | El agente no tiene Docker instalado |
+| `Permission 'run.services.create' denied` | Falta `roles/run.admin` |
+| `permission denied ... docker.sock` | El usuario `jenkins` no está en el grupo `docker` |
+| `gcloud` en el contenedor pide login | El contenedor no alcanza el metadata server; no usar `--network none` |
+
+## Alternativa: OIDC / Workload Identity Federation
+
+Solo es necesaria si Jenkins corre **fuera** de GCP (otra nube u on-premise). Requiere el plugin *OpenID Connect Provider* y un issuer `https://` (real, o ficticio con `--jwk-json-path`). Dentro de GCP la SA asociada a la VM es más simple y no necesita tokens que mantener.
