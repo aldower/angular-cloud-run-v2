@@ -13,7 +13,7 @@ sequenceDiagram
 
 ## 0. Requisitos
 
-- Jenkins con URL **HTTPS pública** (GCP debe leer `https://JENKINS_URL/oidc/.well-known/openid-configuration` y el JWKS). Si Jenkins es privado, ver sección 3.1.
+- Jenkins accesible por HTTP (ej. `http://3.144.78.76:8090`) o HTTPS. GCP **exige que el issuer sea `https://`**; sin HTTPS real se usa un issuer ficticio + JWKS manual (sección 3).
 - `gcloud` autenticado como administrador del proyecto.
 - Agente Jenkins con Docker y permiso para ejecutar contenedores (`/var/run/docker.sock`).
 
@@ -28,7 +28,8 @@ export POOL="jenkins-pool"
 export PROVIDER="jenkins-provider"
 export SA_NAME="jenkins-deployer"
 export SA_EMAIL="$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
-export JENKINS_URL="https://jenkins.midominio.com"   # sin "/" final
+export JENKINS_URL="http://3.144.78.76:8090"          # URL real de Jenkins (sin "/" final)
+export OIDC_ISSUER="https://jenkins.local/oidc"      # issuer ficticio https (debe ser igual en Jenkins y GCP)
 ```
 
 Copiar el valor de `$PROJECT_NUMBER` en `GCP_PROJECT_NUMBER` del Jenkinsfile.
@@ -48,29 +49,33 @@ gcloud iam workload-identity-pools create $POOL \
   --project=$PROJECT_ID --location=global \
   --display-name="Jenkins Pool"
 
+### 3.1 Obtener el JWKS de Jenkins
+
+Desde una máquina que llegue a Jenkins (o desde el propio servidor):
+
+```bash
+curl -s http://3.144.78.76:8090/oidc/jwks > jwks.json
+```
+
+Si trabajas en Cloud Shell, súbelo con el menú ⋮ > *Upload*.
+
+### 3.2 Crear el provider (sin HTTPS real)
+
+```bash
 gcloud iam workload-identity-pools providers create-oidc $PROVIDER \
   --project=$PROJECT_ID --location=global \
   --workload-identity-pool=$POOL \
-  --issuer-uri="$JENKINS_URL/oidc" \
+  --issuer-uri="$OIDC_ISSUER" \
+  --jwk-json-path=jwks.json \
   --allowed-audiences="gcp" \
-  --attribute-mapping="google.subject=assertion.sub" \
-  --attribute-condition="assertion.sub.startsWith('jenkins')"
+  --attribute-mapping="google.subject=assertion.sub"
 ```
 
+- Con `--jwk-json-path` GCP no consulta el issuer; solo exige que sea `https://` y que coincida con el `iss` del token.
 - `--allowed-audiences` debe coincidir con el **Audience** de la credencial en Jenkins (sección 6).
-- Restringe `attribute-condition` a tu job/folder si es posible (el `sub` lo define el plugin; revisa un token real en jwt.io).
-
-### 3.1 Jenkins no accesible desde internet
-
-Descargar `JWKS` de `$JENKINS_URL/oidc/jwks` y subirlo al provider (reemplaza `--issuer-uri` discovery):
-
-```bash
-curl -s $JENKINS_URL/oidc/jwks > jwks.json
-gcloud iam workload-identity-pools providers create-oidc $PROVIDER \
-  ... (mismos parámetros) --jwk-json-path=jwks.json
-```
-
-Si Jenkins rota llaves, hay que actualizar el JWKS.
+- No se usa `attribute-condition` hasta conocer el `sub` real (revisa un token en jwt.io); luego restringe el binding de la sección 5 a ese subject.
+- Si Jenkins rota llaves, hay que actualizar el JWKS (`providers update-oidc ... --jwk-json-path=jwks.json`).
+- Si luego tienes HTTPS real: `--issuer-uri="https://TU_DOMINIO/oidc"` sin `--jwk-json-path`, y Jenkins URL en HTTPS.
 
 ## 4. Service Account y permisos
 
@@ -114,12 +119,12 @@ Solo un subject concreto (más seguro):
 ## 6. Configuración en Jenkins
 
 1. **Instalar plugin**: *Manage Jenkins > Plugins > Available* → **OpenID Connect Provider** (`oidc-provider`). Reiniciar.
-2. **Jenkins URL**: *Manage Jenkins > System > Jenkins Location* → `Jenkins URL` = `$JENKINS_URL` (HTTPS, debe coincidir con el issuer).
+2. **Jenkins URL**: *Manage Jenkins > System > Jenkins Location* → `Jenkins URL` = `$JENKINS_URL`.
 3. **Credencial**: *Manage Jenkins > Credentials > (global) > Add Credentials*
    - Kind: **OpenID Connect id token**
    - ID: `gcp-oidc-token`
    - Audience: `gcp` (igual que `--allowed-audiences`)
-   - Issuer: dejar por defecto (`<Jenkins URL>/oidc`)
+   - Issuer: `https://jenkins.local/oidc` (igual a `$OIDC_ISSUER`; suele estar en la sección avanzada)
 4. **Docker**: el usuario de Jenkins debe poder usar Docker y el agente montar `/var/run/docker.sock`. Plugin **Docker Pipeline** instalado (para `agent { docker {...} }`).
 5. **Multibranch / Pipeline**: crear el job apuntando a este repo (usa el `Jenkinsfile` de la raíz).
 6. Editar en el [Jenkinsfile](Jenkinsfile): `GCP_PROJECT_NUMBER`, `WIF_POOL`, `WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT` según las variables de la sección 1.
@@ -134,6 +139,7 @@ Solo un subject concreto (más seguro):
 
 ```bash
 curl -s $JENKINS_URL/oidc/.well-known/openid-configuration
+curl -s $JENKINS_URL/oidc/jwks
 gcloud iam workload-identity-pools providers describe $PROVIDER \
   --workload-identity-pool=$POOL --location=global --project=$PROJECT_ID
 ```
@@ -143,7 +149,8 @@ gcloud iam workload-identity-pools providers describe $PROVIDER \
 | `invalid_grant` / `audience` | Audience de la credencial ≠ `--allowed-audiences` |
 | `The given credential is rejected by the attribute condition` | `attribute-condition` no cumple con el `sub` real |
 | `Permission 'iam.serviceAccounts.getAccessToken' denied` | Falta `workloadIdentityUser` (sección 5) o API `iamcredentials` |
-| `unable to fetch jwks` | Jenkins no accesible; usar `--jwk-json-path` |
+| `Invalid OIDC issuer URI. The scheme must be https` | El issuer debe ser `https://`; usar `$OIDC_ISSUER` + `--jwk-json-path` |
+| `unable to fetch jwks` / firma inválida | JWKS desactualizado o `iss` del token ≠ `--issuer-uri` |
 | `denied: Permission artifactregistry.repositories.uploadArtifacts` | Falta `artifactregistry.writer` |
 | `iam.serviceaccounts.actAs` en deploy | Falta `serviceAccountUser` sobre la SA de runtime |
 | `docker: command not found` en etapa Build | El agente no tiene Docker instalado |
